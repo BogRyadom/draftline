@@ -1,4 +1,8 @@
+import Link from "next/link";
+
+import { AutoRefresh } from "@/components/auto-refresh";
 import { ConnectGmailButton } from "@/components/connect-gmail-button";
+import { ReclassifyButton } from "@/components/reclassify-button";
 import { SyncButton } from "@/components/sync-button";
 import { apiFetch } from "@/lib/api";
 import { createClient } from "@/lib/supabase/server";
@@ -19,16 +23,36 @@ type EmailItem = {
   subject: string | null;
   snippet: string | null;
   received_at: string | null;
+  category: string | null;
   priority: string | null;
+  classification_reason: string | null;
   status: string;
 };
+
+type Settings = { categories: string[] };
+
+type Filters = { category?: string; priority?: string; sort?: string };
+
+const PRIORITIES = ["urgent", "high", "normal", "low"];
 
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ gmail?: string; reason?: string }>;
+  searchParams: Promise<{
+    gmail?: string;
+    reason?: string;
+    category?: string;
+    priority?: string;
+    sort?: string;
+  }>;
 }) {
   const params = await searchParams;
+  const filters: Filters = {
+    category: params.category,
+    priority: params.priority,
+    sort: params.sort,
+  };
+
   const supabase = await createClient();
   const {
     data: { session },
@@ -44,7 +68,8 @@ export default async function InboxPage({
           Inbox
         </h1>
         <p className="text-sm text-ink-soft">
-          Your unread mail, pulled on demand. Nothing here is ever sent for you.
+          Your unread mail, classified and prioritized. Nothing here is ever sent
+          for you.
         </p>
       </div>
 
@@ -55,7 +80,11 @@ export default async function InboxPage({
       ) : accountsRes.data.length === 0 ? (
         <EmptyConnect />
       ) : (
-        <ConnectedInbox account={accountsRes.data[0]} token={token} />
+        <ConnectedInbox
+          account={accountsRes.data[0]}
+          token={token}
+          filters={filters}
+        />
       )}
     </div>
   );
@@ -64,14 +93,32 @@ export default async function InboxPage({
 async function ConnectedInbox({
   account,
   token,
+  filters,
 }: {
   account: Account;
   token: string;
+  filters: Filters;
 }) {
-  const emailsRes = await apiFetch<EmailItem[]>("/emails", token);
+  const settingsRes = await apiFetch<Settings>("/settings", token);
+  const categories = settingsRes.ok ? settingsRes.data.categories : [];
+
+  const query = new URLSearchParams();
+  if (filters.category) query.set("category", filters.category);
+  if (filters.priority) query.set("priority", filters.priority);
+  if (filters.sort === "priority") query.set("sort", "priority");
+  const emailsRes = await apiFetch<EmailItem[]>(
+    `/emails${query.toString() ? `?${query}` : ""}`,
+    token,
+  );
+  const emails = emailsRes.ok ? emailsRes.data : [];
+  const pending = emails.some((e) => e.status === "new" && !e.category);
+  const filtersActive = Boolean(filters.category || filters.priority);
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Keep polling while new emails are still being classified. */}
+      <AutoRefresh active={pending} />
+
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-surface px-4 py-3">
         <div className="flex flex-col">
           <span className="text-sm font-medium text-ink">
@@ -87,19 +134,31 @@ async function ConnectedInbox({
         <SyncButton accountId={account.id} />
       </div>
 
+      <FilterBar filters={filters} categories={categories} />
+
       {!emailsRes.ok ? (
         <ErrorCard message={emailsRes.error} />
-      ) : emailsRes.data.length === 0 ? (
+      ) : emails.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-12 text-center">
-          <p className="text-sm font-medium text-ink">No unread mail synced yet</p>
+          <p className="text-sm font-medium text-ink">
+            {filtersActive ? "No emails match these filters" : "No unread mail synced yet"}
+          </p>
           <p className="mt-1 text-sm text-ink-soft">
-            Click <span className="font-medium">Sync inbox</span> to pull your
-            latest unread messages.
+            {filtersActive ? (
+              <Link href="/app" className="font-medium text-primary hover:underline">
+                Clear filters
+              </Link>
+            ) : (
+              <>
+                Click <span className="font-medium">Sync inbox</span> to pull your
+                latest unread messages.
+              </>
+            )}
           </p>
         </div>
       ) : (
         <ul className="overflow-hidden rounded-xl border border-border bg-surface">
-          {emailsRes.data.map((email) => (
+          {emails.map((email) => (
             <EmailRow key={email.id} email={email} />
           ))}
         </ul>
@@ -110,8 +169,9 @@ async function ConnectedInbox({
 
 function EmailRow({ email }: { email: EmailItem }) {
   const who = email.from_name || email.from_email || "Unknown sender";
+  const classifying = email.status === "new" && !email.category;
   return (
-    <li className="flex flex-col gap-1 border-b border-border px-4 py-3 last:border-b-0">
+    <li className="flex flex-col gap-1.5 border-b border-border px-4 py-3 last:border-b-0">
       <div className="flex items-baseline justify-between gap-4">
         <span className="truncate text-sm font-medium text-ink">{who}</span>
         <span className="shrink-0 font-mono text-xs text-ink-soft">
@@ -124,22 +184,165 @@ function EmailRow({ email }: { email: EmailItem }) {
       {email.snippet && (
         <span className="line-clamp-1 text-sm text-ink-soft">{email.snippet}</span>
       )}
-      {email.priority && <PriorityBadge priority={email.priority} />}
+      <div className="mt-0.5 flex flex-wrap items-center gap-2">
+        {classifying ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-ink-soft">
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-soft"
+            />
+            Classifying…
+          </span>
+        ) : (
+          <>
+            {email.category && <CategoryBadge category={email.category} />}
+            {email.priority && <PriorityBadge priority={email.priority} />}
+          </>
+        )}
+        <span className="ml-auto">
+          <ReclassifyButton emailId={email.id} />
+        </span>
+      </div>
+      {email.classification_reason && (
+        <span className="line-clamp-1 text-xs text-ink-soft/80">
+          {email.classification_reason}
+        </span>
+      )}
     </li>
   );
 }
 
+function CategoryBadge({ category }: { category: string }) {
+  return (
+    <span className="inline-flex rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-ink-soft">
+      {category}
+    </span>
+  );
+}
+
 function PriorityBadge({ priority }: { priority: string }) {
-  const urgent = priority === "urgent";
+  // Only `urgent` gets the warm signal color; the rest stay calm.
+  const styles: Record<string, string> = {
+    urgent: "bg-urgent/10 text-urgent",
+    high: "bg-surface-2 text-ink",
+    normal: "bg-surface-2 text-ink-soft",
+    low: "bg-surface-2 text-ink-soft",
+  };
   return (
     <span
-      className={`mt-1 inline-flex w-fit rounded-full px-2 py-0.5 text-xs font-medium ${
-        urgent ? "bg-urgent/10 text-urgent" : "bg-surface-2 text-ink-soft"
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+        styles[priority] ?? "bg-surface-2 text-ink-soft"
       }`}
     >
+      {priority === "urgent" && (
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-urgent" />
+      )}
       {priority}
     </span>
   );
+}
+
+function FilterBar({
+  filters,
+  categories,
+}: {
+  filters: Filters;
+  categories: string[];
+}) {
+  return (
+    <div className="flex flex-col gap-2.5">
+      <FilterRow label="Category">
+        <Chip href={hrefWith(filters, { category: "" })} active={!filters.category}>
+          All
+        </Chip>
+        {categories.map((c) => (
+          <Chip
+            key={c}
+            href={hrefWith(filters, { category: c })}
+            active={filters.category === c}
+          >
+            {c}
+          </Chip>
+        ))}
+      </FilterRow>
+      <FilterRow label="Priority">
+        <Chip href={hrefWith(filters, { priority: "" })} active={!filters.priority}>
+          All
+        </Chip>
+        {PRIORITIES.map((p) => (
+          <Chip
+            key={p}
+            href={hrefWith(filters, { priority: p })}
+            active={filters.priority === p}
+          >
+            {p}
+          </Chip>
+        ))}
+      </FilterRow>
+      <FilterRow label="Sort">
+        <Chip
+          href={hrefWith(filters, { sort: "received" })}
+          active={filters.sort !== "priority"}
+        >
+          Newest
+        </Chip>
+        <Chip
+          href={hrefWith(filters, { sort: "priority" })}
+          active={filters.sort === "priority"}
+        >
+          Priority
+        </Chip>
+      </FilterRow>
+    </div>
+  );
+}
+
+function FilterRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="w-16 text-xs font-medium text-ink-soft">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function Chip({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors ${
+        active
+          ? "border-primary bg-primary/10 text-primary"
+          : "border-border bg-surface text-ink-soft hover:bg-surface-2"
+      }`}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function hrefWith(current: Filters, patch: Filters): string {
+  const next = { ...current, ...patch };
+  const sp = new URLSearchParams();
+  if (next.category) sp.set("category", next.category);
+  if (next.priority) sp.set("priority", next.priority);
+  if (next.sort && next.sort !== "received") sp.set("sort", next.sort);
+  const qs = sp.toString();
+  return qs ? `/app?${qs}` : "/app";
 }
 
 function EmptyConnect() {
@@ -162,13 +365,7 @@ function EmptyConnect() {
   );
 }
 
-function ConnectBanner({
-  gmail,
-  reason,
-}: {
-  gmail?: string;
-  reason?: string;
-}) {
+function ConnectBanner({ gmail, reason }: { gmail?: string; reason?: string }) {
   if (gmail === "connected") {
     return (
       <p className="rounded-xl border border-primary/25 bg-primary/5 px-4 py-3 text-sm text-ink">
