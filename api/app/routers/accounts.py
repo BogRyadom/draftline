@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import gmail
 from app.audit import log_action
-from app.classification import classify_email_ids
+from app.classification import classify_email_ids, fetch_unbadged_ids
 from app.auth import CurrentUser, get_current_user
 from app.config import get_settings
 from app.crypto import get_cipher
@@ -230,9 +230,11 @@ async def sync_account(
     )
     await session.commit()
 
-    # Classify the new emails after the response is sent.
-    new_ids = [email.id for email in created]
-    if new_ids:
-        background.add_task(classify_email_ids, user_uuid, new_ids)
+    # Classify every still-unbadged email after the response is sent. This covers
+    # newly synced mail AND any earlier messages that predate classification — a
+    # re-sync dedups those, so relying on "created" alone would skip them.
+    unbadged_ids = await fetch_unbadged_ids(session, user_uuid, limit=200)
+    if unbadged_ids:
+        background.add_task(classify_email_ids, user_uuid, unbadged_ids)
 
-    return SyncResult(account_id=account.id, fetched=len(messages), new=len(new_ids))
+    return SyncResult(account_id=account.id, fetched=len(messages), new=len(created))

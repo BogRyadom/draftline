@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from typing import Literal
 
@@ -12,12 +13,14 @@ from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import CurrentUser, get_current_user
-from app.classification import classify_one, get_user_categories
+from app.classification import classify_one, fetch_unbadged_ids, get_user_categories
 from app.db import get_session
 from app.llm import LLMError
 from app.models import Email
 
 router = APIRouter(prefix="/emails", tags=["emails"])
+
+logger = logging.getLogger("draftline.emails")
 
 # Ordering rank for priority sort (urgent first).
 _PRIORITY_RANK = case(
@@ -72,6 +75,49 @@ async def list_emails(
 
     rows = await session.execute(stmt.limit(limit))
     return list(rows.scalars().all())
+
+
+class BulkClassifyResult(BaseModel):
+    total: int
+    classified: int
+    failed: int
+
+
+@router.post("/classify-unbadged", response_model=BulkClassifyResult)
+async def classify_unbadged(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> BulkClassifyResult:
+    """Reliable fallback: classify every still-unbadged email now, synchronously,
+    returning counts. Each email commits on its own; failures are logged and skipped."""
+    user_uuid = uuid.UUID(user.id)
+    categories = await get_user_categories(session, user_uuid)
+    ids = await fetch_unbadged_ids(session, user_uuid, limit)
+
+    classified = 0
+    failed = 0
+    for email_id in ids:
+        email = (
+            await session.execute(
+                select(Email).where(Email.id == email_id, Email.user_id == user_uuid)
+            )
+        ).scalar_one_or_none()
+        if email is None:
+            continue
+        try:
+            await classify_one(session, email, categories)
+            await session.commit()
+            classified += 1
+        except Exception:
+            await session.rollback()
+            failed += 1
+            logger.exception("bulk classify failed for email %s", email_id)
+
+    logger.info(
+        "bulk classify: %d classified, %d failed of %d", classified, failed, len(ids)
+    )
+    return BulkClassifyResult(total=len(ids), classified=classified, failed=failed)
 
 
 @router.post("/{email_id}/classify", response_model=EmailOut)

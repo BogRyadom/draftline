@@ -68,27 +68,58 @@ async def classify_one(
     return result
 
 
+async def fetch_unbadged_ids(
+    session: AsyncSession, user_id: uuid.UUID, limit: int
+) -> list[uuid.UUID]:
+    """IDs of the user's emails that have no category yet."""
+    rows = await session.execute(
+        select(Email.id)
+        .where(Email.user_id == user_id, Email.category.is_(None))
+        .order_by(Email.received_at.desc().nullslast())
+        .limit(limit)
+    )
+    return list(rows.scalars().all())
+
+
 async def classify_email_ids(user_id: uuid.UUID, email_ids: list[uuid.UUID]) -> None:
-    """Background task: classify a batch of emails, one commit each."""
+    """Background task: classify each email in its OWN session so one failure
+    (DB or model) can never abort the batch. Logs every item for visibility."""
     if not email_ids:
+        logger.info("classify batch: nothing to do for user %s", user_id)
         return
 
+    logger.info("classify batch start: %d email(s) for user %s", len(email_ids), user_id)
+
+    # Fetch categories once (its own short-lived session).
     async with get_sessionmaker()() as session:
         categories = await get_user_categories(session, user_id)
-        for email_id in email_ids:
-            email = (
-                await session.execute(
-                    select(Email).where(
-                        Email.id == email_id, Email.user_id == user_id
+
+    ok = 0
+    failed = 0
+    for email_id in email_ids:
+        try:
+            async with get_sessionmaker()() as session:
+                email = (
+                    await session.execute(
+                        select(Email).where(
+                            Email.id == email_id, Email.user_id == user_id
+                        )
                     )
-                )
-            ).scalar_one_or_none()
-            if email is None:
-                continue
-            try:
-                await classify_one(session, email, categories)
+                ).scalar_one_or_none()
+                if email is None:
+                    logger.warning("classify skip: email %s not found", email_id)
+                    continue
+                result = await classify_one(session, email, categories)
                 await session.commit()
-            except Exception:
-                await session.rollback()
-                logger.exception("Classification failed for email %s", email_id)
-            await asyncio.sleep(_INTER_CALL_DELAY_SECONDS)
+            ok += 1
+            logger.info(
+                "classify ok: %s -> %s / %s", email_id, result.category, result.priority
+            )
+        except Exception as exc:
+            failed += 1
+            logger.exception("classify FAIL: %s: %r", email_id, exc)
+        await asyncio.sleep(_INTER_CALL_DELAY_SECONDS)
+
+    logger.info(
+        "classify batch done: %d ok, %d failed of %d", ok, failed, len(email_ids)
+    )
