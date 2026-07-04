@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.routers import accounts as accounts_router
 from app.routers import me as me_router
 
 settings = get_settings()
@@ -34,3 +35,4 @@ async def health() -> dict[str, str]:
 
 
 app.include_router(me_router.router)
+app.include_router(accounts_router.router)
