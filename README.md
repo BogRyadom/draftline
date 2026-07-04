@@ -38,8 +38,8 @@ draftline/
 
 🚧 **In active development, built phase by phase.**
 
-- [ ] **Phase 0** — Foundation: repo, auth, DB schema, authenticated round-trip
-- [ ] Phase 1 — Connect Gmail + sync
+- [x] **Phase 0** — Foundation: repo, auth, DB schema, authenticated round-trip
+- [x] **Phase 1** — Connect Gmail (OAuth) + sync unread mail into the app
 - [ ] Phase 2 — Classify + prioritize
 - [ ] Phase 3 — Knowledge base + RAG index
 - [ ] Phase 4 — Draft generation
