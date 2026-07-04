@@ -18,7 +18,7 @@ from app.auth import CurrentUser, get_current_user
 from app.config import get_settings
 from app.crypto import get_cipher
 from app.db import get_session
-from app.models import EmailAccount
+from app.models import Email, EmailAccount
 from app.oauth_state import StateError, create_state, verify_state
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -31,6 +31,12 @@ class AccountOut(BaseModel):
     status: str
     last_synced_at: dt.datetime | None
     created_at: dt.datetime
+
+
+class SyncResult(BaseModel):
+    account_id: uuid.UUID
+    fetched: int
+    new: int
 
 
 def _frontend_origin() -> str:
@@ -139,3 +145,73 @@ async def gmail_callback(
     await session.commit()
 
     return RedirectResponse(f"{app_url}?gmail=connected")
+
+
+@router.post("/{account_id}/sync", response_model=SyncResult)
+async def sync_account(
+    account_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SyncResult:
+    """Pull the latest unread mail for an account into `emails` (dedup by message id)."""
+    user_uuid = uuid.UUID(user.id)
+    account = (
+        await session.execute(
+            select(EmailAccount).where(
+                EmailAccount.id == account_id,
+                EmailAccount.user_id == user_uuid,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found.")
+    if not account.oauth_refresh_token_enc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account has no stored token.")
+
+    refresh_token = get_cipher().decrypt(account.oauth_refresh_token_enc)
+
+    try:
+        messages = await run_in_threadpool(
+            gmail.fetch_unread, refresh_token, get_settings().sync_max_results
+        )
+    except Exception:
+        account.status = "error"
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Gmail sync failed."
+        )
+
+    existing_ids = set(
+        (
+            await session.execute(
+                select(Email.provider_message_id).where(Email.account_id == account.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    new_count = 0
+    for msg in messages:
+        if msg["provider_message_id"] in existing_ids:
+            continue
+        session.add(
+            Email(user_id=user_uuid, account_id=account.id, status="new", **msg)
+        )
+        new_count += 1
+
+    account.last_synced_at = dt.datetime.now(dt.timezone.utc)
+    account.status = "connected"
+
+    await log_action(
+        session,
+        user_id=user_uuid,
+        action="sync_run",
+        entity_type="email_account",
+        entity_id=account.id,
+        metadata={"fetched": len(messages), "new": new_count},
+    )
+    await session.commit()
+
+    return SyncResult(account_id=account.id, fetched=len(messages), new=new_count)

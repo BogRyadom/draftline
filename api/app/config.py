@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # ── Database (Phase 0 schema; used from Phase 1 onward) ─────────────────
     database_url: str = ""
 
+    # ── Sync ────────────────────────────────────────────────────────────────
+    # How many unread messages a single sync pulls.
+    sync_max_results: int = 25
+
     # ── LLM + embeddings (Phase 2+) ────────────────────────────────────────
     groq_api_key: str = ""
     gemini_api_key: str = ""
