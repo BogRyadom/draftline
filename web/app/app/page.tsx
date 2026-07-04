@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { AutoRefresh } from "@/components/auto-refresh";
+import { ClassifyAllButton } from "@/components/classify-all-button";
 import { ConnectGmailButton } from "@/components/connect-gmail-button";
 import { ReclassifyButton } from "@/components/reclassify-button";
 import { SyncButton } from "@/components/sync-button";
@@ -131,7 +132,10 @@ async function ConnectedInbox({
               : "not synced yet"}
           </span>
         </div>
-        <SyncButton accountId={account.id} />
+        <div className="flex flex-wrap items-center gap-2">
+          <ClassifyAllButton />
+          <SyncButton accountId={account.id} />
+        </div>
       </div>
 
       <FilterBar filters={filters} categories={categories} />
