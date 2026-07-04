@@ -14,3 +14,6 @@ asyncpg>=0.29,<0.31
 # Gmail OAuth + API (Phase 1).
 google-auth-oauthlib>=1.2,<2.0
 google-api-python-client>=2.130,<3.0
+
+# LLM (Phase 2+): Groq via the OpenAI-compatible client.
+openai>=1.40,<3.0
