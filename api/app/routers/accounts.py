@@ -6,7 +6,7 @@ import datetime as dt
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import gmail
 from app.audit import log_action
+from app.classification import classify_email_ids
 from app.auth import CurrentUser, get_current_user
 from app.config import get_settings
 from app.crypto import get_cipher
@@ -162,10 +163,14 @@ async def gmail_callback(
 @router.post("/{account_id}/sync", response_model=SyncResult)
 async def sync_account(
     account_id: uuid.UUID,
+    background: BackgroundTasks,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> SyncResult:
-    """Pull the latest unread mail for an account into `emails` (dedup by message id)."""
+    """Pull the latest unread mail for an account into `emails` (dedup by message id).
+
+    Newly stored emails are classified in the background after the response.
+    """
     user_uuid = uuid.UUID(user.id)
     account = (
         await session.execute(
@@ -204,14 +209,13 @@ async def sync_account(
         .all()
     )
 
-    new_count = 0
+    created: list[Email] = []
     for msg in messages:
         if msg["provider_message_id"] in existing_ids:
             continue
-        session.add(
-            Email(user_id=user_uuid, account_id=account.id, status="new", **msg)
-        )
-        new_count += 1
+        email = Email(user_id=user_uuid, account_id=account.id, status="new", **msg)
+        session.add(email)
+        created.append(email)
 
     account.last_synced_at = dt.datetime.now(dt.timezone.utc)
     account.status = "connected"
@@ -222,8 +226,13 @@ async def sync_account(
         action="sync_run",
         entity_type="email_account",
         entity_id=account.id,
-        metadata={"fetched": len(messages), "new": new_count},
+        metadata={"fetched": len(messages), "new": len(created)},
     )
     await session.commit()
 
-    return SyncResult(account_id=account.id, fetched=len(messages), new=new_count)
+    # Classify the new emails after the response is sent.
+    new_ids = [email.id for email in created]
+    if new_ids:
+        background.add_task(classify_email_ids, user_uuid, new_ids)
+
+    return SyncResult(account_id=account.id, fetched=len(messages), new=len(new_ids))

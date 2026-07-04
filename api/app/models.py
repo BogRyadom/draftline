@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Text, text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -65,6 +65,17 @@ class Email(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )
+
+
+class Settings(Base):
+    __tablename__ = "settings"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    categories: Mapped[list] = mapped_column(JSONB, nullable=False)
+    tone: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    poll_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    poll_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("15"))
+    auto_push_drafts: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
 
 class AuditLog(Base):

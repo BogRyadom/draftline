@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.routers import accounts as accounts_router
 from app.routers import emails as emails_router
 from app.routers import me as me_router
+from app.routers import settings as settings_router
 
 settings = get_settings()
 
@@ -38,3 +39,4 @@ async def health() -> dict[str, str]:
 app.include_router(me_router.router)
 app.include_router(accounts_router.router)
 app.include_router(emails_router.router)
+app.include_router(settings_router.router)
