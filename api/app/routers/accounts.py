@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,6 +23,8 @@ from app.models import Email, EmailAccount
 from app.oauth_state import StateError, create_state, verify_state
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
+
+logger = logging.getLogger("draftline.accounts")
 
 
 class AccountOut(BaseModel):
@@ -88,17 +91,26 @@ async def gmail_callback(
     app_url = f"{_frontend_origin()}/app"
 
     if error or not code or not state:
-        return RedirectResponse(f"{app_url}?gmail=error")
+        logger.warning("Gmail callback missing code/state (google error=%r)", error)
+        return RedirectResponse(f"{app_url}?gmail=error&reason=params")
 
     try:
         user_id = uuid.UUID(verify_state(state))
-    except (StateError, ValueError):
-        return RedirectResponse(f"{app_url}?gmail=error")
+    except (StateError, ValueError) as exc:
+        logger.warning("Gmail callback rejected state: %s", exc)
+        return RedirectResponse(f"{app_url}?gmail=error&reason=state")
 
     try:
         result = await run_in_threadpool(gmail.exchange_code, code)
-    except Exception:
-        return RedirectResponse(f"{app_url}?gmail=error")
+    except Exception as exc:
+        # Surface the real Google error (redirect_uri_mismatch, invalid_client,
+        # Gmail API disabled, …) instead of swallowing it.
+        logger.exception(
+            "Gmail token exchange/profile failed (redirect_uri=%s): %r",
+            get_settings().google_oauth_redirect_uri,
+            exc,
+        )
+        return RedirectResponse(f"{app_url}?gmail=error&reason=exchange")
 
     refresh_token = result.get("refresh_token")
     email_address = result.get("email")
