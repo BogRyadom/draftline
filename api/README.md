@@ -30,9 +30,18 @@ uvicorn app.main:app --reload --port 8000
 
 ## Environment
 
-See [`.env.example`](.env.example). Phase 0 only needs `SUPABASE_URL`
-(and optionally `SUPABASE_JWKS_URL`, `FRONTEND_ORIGIN`); the rest are placeholders
-for later phases and may stay empty.
+See [`.env.example`](.env.example). Phase 0 needs `SUPABASE_URL`
+(and optionally `SUPABASE_JWKS_URL`, `FRONTEND_ORIGIN`). Phase 1 adds:
+
+- `DATABASE_URL` — from Supabase → *Connect*. Prefer the **Session pooler** or
+  **direct** connection string for this long-lived service (the transaction
+  pooler is aimed at serverless). Either `postgresql://…` or
+  `postgresql+asyncpg://…` works — the driver is normalized to asyncpg.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` —
+  the Gmail OAuth **Web application** client. Redirect URI (local):
+  `http://localhost:8000/accounts/gmail/callback` (must match Google Cloud exactly).
+- `FERNET_KEY` — encrypts stored OAuth refresh tokens. Generate one with
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 
 ## Tests
 
