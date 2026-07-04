@@ -48,7 +48,17 @@ def _client_config() -> dict:
 
 
 def _flow(state: str | None = None) -> Flow:
-    flow = Flow.from_client_config(_client_config(), scopes=SCOPES, state=state)
+    # Disable PKCE: we are a confidential client (client_secret protects the
+    # exchange), and connect/callback are separate stateless requests, so there
+    # is nowhere to carry a per-request code_verifier. Both flows must agree —
+    # keeping this in the single helper guarantees no code_challenge is sent at
+    # connect and no verifier is expected at callback.
+    flow = Flow.from_client_config(
+        _client_config(),
+        scopes=SCOPES,
+        state=state,
+        autogenerate_code_verifier=False,
+    )
     flow.redirect_uri = get_settings().google_oauth_redirect_uri
     return flow
 
