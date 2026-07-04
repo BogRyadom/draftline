@@ -40,7 +40,7 @@ draftline/
 
 - [x] **Phase 0** — Foundation: repo, auth, DB schema, authenticated round-trip
 - [x] **Phase 1** — Connect Gmail (OAuth) + sync unread mail into the app
-- [ ] Phase 2 — Classify + prioritize
+- [x] **Phase 2** — Auto-classify: category + priority + reason (Groq JSON mode)
 - [ ] Phase 3 — Knowledge base + RAG index
 - [ ] Phase 4 — Draft generation
 - [ ] Phase 5 — Dashboard, audit, settings, polish
