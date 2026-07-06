@@ -12,6 +12,7 @@ import time
 from functools import lru_cache
 from typing import Literal
 
+import httpx
 from openai import APIError, OpenAI, RateLimitError
 from pydantic import BaseModel, ValidationError
 
@@ -19,6 +20,12 @@ from app.config import get_settings
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 CLASSIFY_MODEL = "llama-3.1-8b-instant"
+
+# Embeddings: Gemini (Groq has no embeddings API). text-embedding-004 is retired;
+# gemini-embedding-001 with outputDimensionality=768 keeps the vector(768) schema.
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1"
+EMBED_MODEL = "gemini-embedding-001"
+EMBEDDING_DIM = 768
 
 PRIORITIES = ("low", "normal", "high", "urgent")
 
@@ -144,3 +151,57 @@ def classify(
             continue
 
     raise LLMError("Model did not return valid classification JSON.")
+
+
+# ── Embeddings (Gemini) ─────────────────────────────────────────────────────
+
+
+def _embed_one(
+    client: httpx.Client, key: str, text: str, task_type: str, *, max_retries: int = 4
+) -> list[float]:
+    url = f"{GEMINI_BASE_URL}/models/{EMBED_MODEL}:embedContent?key={key}"
+    body = {
+        "model": f"models/{EMBED_MODEL}",
+        "content": {"parts": [{"text": text}]},
+        "taskType": task_type,
+        "outputDimensionality": EMBEDDING_DIM,
+    }
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.post(url, json=body)
+        except httpx.TransportError as exc:
+            if attempt == max_retries:
+                raise LLMError(f"Gemini network error: {exc}") from exc
+            time.sleep(2 * (attempt + 1))
+            continue
+        if resp.status_code == 429:
+            if attempt == max_retries:
+                raise LLMError("Gemini rate limit exceeded after backoff.")
+            time.sleep(2 * (attempt + 1))
+            continue
+        if resp.status_code >= 400:
+            raise LLMError(f"Gemini embed error {resp.status_code}: {resp.text[:200]}")
+        return resp.json()["embedding"]["values"]
+    raise LLMError("Gemini embed failed.")  # pragma: no cover
+
+
+def embed(
+    texts: list[str], *, task_type: str = "RETRIEVAL_DOCUMENT"
+) -> list[list[float]]:
+    """Embed texts with Gemini gemini-embedding-001 at 768 dims. Blocking; call via
+    run_in_threadpool. `task_type` is RETRIEVAL_DOCUMENT for stored chunks and
+    RETRIEVAL_QUERY for search queries. One request per text (this model's batch
+    endpoint is unreliable); retries transient network errors and 429s."""
+    if not texts:
+        return []
+    key = get_settings().gemini_api_key
+    if not key:
+        raise LLMError("GEMINI_API_KEY is not configured.")
+
+    with httpx.Client(timeout=90) as client:
+        return [_embed_one(client, key, text, task_type) for text in texts]
+
+
+def embed_query(text: str) -> list[float]:
+    """Embed a single search query."""
+    return embed([text], task_type="RETRIEVAL_QUERY")[0]
