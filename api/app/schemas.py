@@ -13,6 +13,9 @@ class CitationOut(BaseModel):
     filename: str | None = None
     chunk_index: int | None = None
     quote: str
+    # TEMPORARY diagnostic: retrieval similarity score, shown in the UI while we
+    # tune the threshold. Remove after tuning.
+    similarity: float | None = None
 
 
 class DraftOut(BaseModel):

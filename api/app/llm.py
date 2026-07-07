@@ -172,6 +172,9 @@ class Citation(BaseModel):
     filename: str | None = None
     chunk_index: int | None = None
     quote: str
+    # TEMPORARY diagnostic: cosine similarity of this chunk to the query, surfaced
+    # in the UI to help tune the retrieval threshold. Remove after tuning.
+    similarity: float | None = None
 
 
 class DraftResult(BaseModel):
@@ -262,6 +265,8 @@ def citations_from_chunks(chunks: list[dict]) -> list[Citation]:
             filename=ch.get("filename"),
             chunk_index=ch.get("chunk_index"),
             quote=(ch.get("content") or "").strip()[:_MAX_QUOTE_CHARS],
+            # TEMPORARY diagnostic: round the retrieval score for display.
+            similarity=round(float(ch["similarity"]), 3) if ch.get("similarity") is not None else None,
         )
         for ch in chunks
     ]

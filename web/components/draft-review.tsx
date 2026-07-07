@@ -12,6 +12,9 @@ type Citation = {
   filename: string | null;
   chunk_index: number | null;
   quote: string;
+  // TEMPORARY diagnostic: retrieval similarity score, shown to help tune the
+  // threshold. Remove after tuning.
+  similarity: number | null;
 };
 
 export type Draft = {
@@ -291,6 +294,10 @@ export function DraftReview({
                     [{i + 1}] {c.filename || "document"}
                     {c.chunk_index != null && (
                       <span className="text-ink-soft"> · chunk {c.chunk_index}</span>
+                    )}
+                    {/* TEMPORARY diagnostic: retrieval score for threshold tuning. */}
+                    {c.similarity != null && (
+                      <span className="font-mono text-ink-soft"> · {c.similarity.toFixed(3)}</span>
                     )}
                   </span>
                   <blockquote className="border-l-2 border-border pl-3 text-xs text-ink-soft">
