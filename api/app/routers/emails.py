@@ -235,7 +235,9 @@ async def generate_draft(
             tone=tone,
             language=email.language,
         )
-    except LLMError as exc:
+    except Exception as exc:
+        # Log the real cause (full traceback) before the generic user-facing error.
+        logger.exception("draft generation failed for email %s", email.id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Draft generation failed. Please try again.",

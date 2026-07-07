@@ -8,6 +8,7 @@ plugin system. Phase 2 uses only `classify()`; `draft()`/`embed()` arrive later.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from functools import lru_cache
@@ -18,6 +19,8 @@ from openai import APIError, OpenAI, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 from app.config import get_settings
+
+logger = logging.getLogger("draftline.llm")
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 CLASSIFY_MODEL = "llama-3.1-8b-instant"
@@ -162,9 +165,36 @@ def classify(
 
 DRAFT_MODEL = "llama-3.3-70b-versatile"
 
+# The source email body is truncated to this many chars when building the prompt
+# (the subject is kept whole). Guards against long emails causing token drift or
+# timeouts.
 _MAX_SOURCE_BODY_CHARS = 4000
 _MAX_CHUNK_CHARS = 1200
 _MAX_QUOTE_CHARS = 240
+
+# Fixed, honest fallback replies (localized), used when we cannot ground a reply
+# or the model fails to return usable output. Templated — never model-written —
+# so they cannot invent facts or mirror the incoming email's topic.
+_FALLBACK_REPLIES = {
+    "russian": (
+        "Здравствуйте! К сожалению, у нас нет этой информации в базе знаний. "
+        "С вами свяжется сотрудник службы поддержки."
+    ),
+    "русский": (
+        "Здравствуйте! К сожалению, у нас нет этой информации в базе знаний. "
+        "С вами свяжется сотрудник службы поддержки."
+    ),
+    "english": (
+        "Hello! Unfortunately we don't have this information in our knowledge "
+        "base. A member of our support team will get back to you."
+    ),
+}
+
+
+def fallback_reply(language: str | None) -> str:
+    """Return the fixed fallback reply for `language` (English when unknown)."""
+    key = (language or "").strip().lower()
+    return _FALLBACK_REPLIES.get(key, _FALLBACK_REPLIES["english"])
 
 
 class Citation(BaseModel):
@@ -372,22 +402,38 @@ def draft(
     high_cutoff = get_settings().rag_confidence_high_similarity
     messages = _draft_messages(source_email, chunks, tone, language)
 
-    for _ in range(2):  # initial attempt + one retry on parse failure
+    last_content: str | None = None
+    for attempt in range(2):  # initial attempt + one retry on malformed JSON
         resp = _chat(messages, model=DRAFT_MODEL, temperature=0.4)
-        content = resp.choices[0].message.content or ""
+        last_content = resp.choices[0].message.content or ""
         usage = resp.usage
         try:
             return parse_draft(
-                content,
+                last_content,
                 chunks,
                 usage_prompt=getattr(usage, "prompt_tokens", 0) or 0,
                 usage_completion=getattr(usage, "completion_tokens", 0) or 0,
                 high_cutoff=high_cutoff,
             )
-        except (json.JSONDecodeError, ValidationError):
-            continue
+        except (json.JSONDecodeError, ValidationError) as exc:
+            logger.error(
+                "draft parse failed (attempt %d/2): %s; raw model output=%r",
+                attempt + 1, exc, (last_content or "")[:2000],
+            )
 
-    raise LLMError("Model did not return a valid draft.")
+    # Both attempts failed → return the honest fallback rather than a hard error.
+    logger.error(
+        "draft: model returned no valid JSON after retry; using fallback. raw=%r",
+        (last_content or "")[:2000],
+    )
+    return DraftResult(
+        body=fallback_reply(language),
+        citations=[],
+        confidence="low",
+        model=DRAFT_MODEL,
+        prompt_tokens=0,
+        completion_tokens=0,
+    )
 
 
 # ── Embeddings (Gemini) ─────────────────────────────────────────────────────

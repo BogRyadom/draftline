@@ -9,6 +9,7 @@ from app.llm import (
     apply_signature,
     citations_from_chunks,
     confidence_from_chunks,
+    fallback_reply,
     parse_draft,
     strip_out_of_range_citations,
 )
@@ -96,6 +97,13 @@ def test_apply_signature_strips_model_signoff_before_appending():
 
 def test_apply_signature_no_signature_leaves_body_without_signoff():
     assert apply_signature("Just the body.", "") == "Just the body."
+
+
+def test_fallback_reply_is_localized_with_english_default():
+    assert fallback_reply("Russian").startswith("Здравствуйте")
+    assert fallback_reply("English").startswith("Hello")
+    assert fallback_reply(None).startswith("Hello")  # unknown → English
+    assert fallback_reply("Klingon").startswith("Hello")
 
 
 def test_malformed_json_raises():
