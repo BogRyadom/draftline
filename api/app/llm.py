@@ -8,6 +8,7 @@ plugin system. Phase 2 uses only `classify()`; `draft()`/`embed()` arrive later.
 from __future__ import annotations
 
 import json
+import re
 import time
 from functools import lru_cache
 from typing import Literal
@@ -184,11 +185,14 @@ class DraftResult(BaseModel):
 
 _DRAFT_SYSTEM_PROMPT = (
     "You draft reply emails for a human to review before anything is sent. Rules:\n"
-    "- Ground every factual claim ONLY in the incoming email and the provided "
-    "sources. Cite sources inline as [n] using their numbers; never cite a number "
-    "that was not provided.\n"
-    "- If the sources do not contain enough information to answer, say so plainly "
-    "and do NOT invent facts, policies, prices, dates, or commitments.\n"
+    "- Ground every factual claim ONLY in the incoming email and the provided sources.\n"
+    "- If sources ARE provided, answer specifically using ONLY those sources and cite "
+    "them inline as [n] (n is the source number); never cite a number that was not "
+    "provided.\n"
+    "- If NO sources are provided, do not answer from your own knowledge: write a "
+    "short, polite reply saying we do not have this information in our knowledge base "
+    "and that a team member will follow up. Invent no facts, policies, prices, dates, "
+    "or commitments, and cite nothing.\n"
     "- Write only the reply body. Do not include a subject line or email headers. "
     "If a signature is provided, end with it.\n"
     "- Match the requested tone and length.\n"
@@ -231,8 +235,9 @@ def _draft_messages(
             lines.append(f"[{i}] ({label}): {(ch.get('content') or '')[:_MAX_CHUNK_CHARS]}")
     else:
         lines.append(
-            "Knowledge base sources: NONE were found relevant. Do not invent facts; "
-            "acknowledge that you lack specific information and set confidence to low."
+            "Knowledge base sources: NONE. Do not invent an answer. Write a short, "
+            "polite reply stating we do not have this information in our knowledge base "
+            "and that a team member will follow up. Do not include any [n] citations."
         )
     lines += [
         "",
@@ -263,6 +268,24 @@ def citations_from_chunks(chunks: list[dict]) -> list[Citation]:
     ]
 
 
+_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+
+def strip_out_of_range_citations(body: str, n_sources: int) -> str:
+    """Drop any [n] whose number falls outside 1..n_sources (e.g. a hallucinated
+    [5] when only 3 sources exist, or any marker at all when there are none), then
+    tidy the whitespace and stray punctuation the removal leaves behind."""
+
+    def repl(match: re.Match) -> str:
+        n = int(match.group(1))
+        return match.group(0) if 1 <= n <= n_sources else ""
+
+    cleaned = _CITATION_MARKER_RE.sub(repl, body)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
 def confidence_from_chunks(chunks: list[dict], *, high_cutoff: float) -> str:
     """Confidence is computed from retrieval, not decided by the model:
     no chunks → low; top similarity below `high_cutoff` → medium; at/above → high."""
@@ -284,6 +307,8 @@ def parse_draft(
     and confidence from the retrieved chunks."""
     data = json.loads(content)
     body = str(data.get("body", "")).strip()
+    # Drop citation markers the model may have invented beyond the real sources.
+    body = strip_out_of_range_citations(body, len(chunks))
     return DraftResult(
         body=body,
         citations=citations_from_chunks(chunks),

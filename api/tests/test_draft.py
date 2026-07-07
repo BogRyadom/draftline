@@ -9,6 +9,7 @@ from app.llm import (
     citations_from_chunks,
     confidence_from_chunks,
     parse_draft,
+    strip_out_of_range_citations,
 )
 
 CHUNKS = [
@@ -59,6 +60,24 @@ def test_no_chunks_yields_low_confidence_and_no_citations():
     result = parse_draft(content, [], usage_prompt=1, usage_completion=1, high_cutoff=0.6)
     assert result.confidence == "low"
     assert result.citations == []
+
+
+def test_strips_out_of_range_citation_markers():
+    assert (
+        strip_out_of_range_citations("A [1] and [2] but not [5].", 2)
+        == "A [1] and [2] but not."
+    )
+
+
+def test_strips_all_markers_when_no_sources():
+    assert strip_out_of_range_citations("We will follow up [1].", 0) == "We will follow up."
+
+
+def test_parse_draft_drops_hallucinated_markers_in_body():
+    content = json.dumps({"body": "Refund in 30 days [1]. Also see [9]."})
+    result = parse_draft(content, CHUNKS, usage_prompt=1, usage_completion=1, high_cutoff=0.6)
+    assert "[9]" not in result.body
+    assert "[1]" in result.body
 
 
 def test_malformed_json_raises():
