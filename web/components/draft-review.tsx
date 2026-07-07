@@ -221,7 +221,14 @@ export function DraftReview({
               {notice && <p className="text-sm text-primary">{notice}</p>}
 
               {dismissed ? (
-                <p className="text-sm text-ink-soft">This draft was dismissed.</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-sm text-ink-soft">
+                    This draft was dismissed.
+                  </span>
+                  <Button onClick={generate} disabled={busy != null}>
+                    {busy === "generate" ? "Drafting…" : "Generate new draft"}
+                  </Button>
+                </div>
               ) : savedToGmail ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary">
