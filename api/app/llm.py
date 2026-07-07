@@ -240,12 +240,15 @@ def _language_instruction(language: str | None) -> str:
     lang = (language or "").strip()
     if lang:
         return (
-            f"Write the ENTIRE reply in {lang}, matching the language the customer "
-            "wrote in. Do not switch languages."
+            f"Write the ENTIRE reply strictly in {lang}, using only that language's "
+            "script. Do not switch languages and do not output any Chinese, "
+            "Japanese, or Korean characters."
         )
     return (
-        "Detect the language of the incoming email and write the ENTIRE reply in "
-        "that same language. Do not switch languages."
+        "Detect the language of the incoming email and write the ENTIRE reply "
+        "strictly in that same language, using only that language's script. Do not "
+        "switch languages and do not output any Chinese, Japanese, or Korean "
+        "characters."
     )
 
 
@@ -360,6 +363,47 @@ def strip_out_of_range_citations(body: str, n_sources: int) -> str:
     return cleaned.strip()
 
 
+# East-Asian languages whose scripts legitimately use CJK codepoints; for these
+# we must NOT strip CJK. Values are the human-readable names the classifier emits.
+_EAST_ASIAN_LANGUAGES = frozenset(
+    {"chinese", "mandarin", "cantonese", "japanese", "korean"}
+)
+
+# CJK and related codepoint ranges treated as artifacts in non-East-Asian replies.
+_CJK_RE = re.compile(
+    "["
+    "ᄀ-ᇿ"  # Hangul Jamo
+    "　-〿"  # CJK symbols & punctuation
+    "぀-ゟ"  # Hiragana
+    "゠-ヿ"  # Katakana
+    "㐀-䶿"  # CJK Extension A
+    "一-鿿"  # CJK Unified Ideographs
+    "가-힯"  # Hangul Syllables
+    "豈-﫿"  # CJK Compatibility Ideographs
+    "＀-￯"  # Halfwidth & Fullwidth Forms
+    "]"
+)
+
+
+def strip_cjk(text: str) -> str:
+    """Remove Chinese/Japanese/Korean codepoints; tidy spacing only if any were
+    actually removed, so clean text keeps its original formatting."""
+    cleaned = _CJK_RE.sub("", text)
+    if cleaned == text:
+        return text
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def strip_cjk_if_needed(text: str, language: str | None) -> str:
+    """Safety net for token drift: strip CJK artifacts unless the reply's language
+    is East-Asian (where CJK is the expected script)."""
+    if (language or "").strip().lower() in _EAST_ASIAN_LANGUAGES:
+        return text
+    return strip_cjk(text)
+
+
 def confidence_from_chunks(chunks: list[dict], *, high_cutoff: float) -> str:
     """Confidence is computed from retrieval, not decided by the model:
     no chunks → low; top similarity below `high_cutoff` → medium; at/above → high."""
@@ -404,7 +448,8 @@ def draft(
 
     last_content: str | None = None
     for attempt in range(2):  # initial attempt + one retry on malformed JSON
-        resp = _chat(messages, model=DRAFT_MODEL, temperature=0.4)
+        # Lower temperature reduces token/script drift on the draft model.
+        resp = _chat(messages, model=DRAFT_MODEL, temperature=0.3)
         last_content = resp.choices[0].message.content or ""
         usage = resp.usage
         try:

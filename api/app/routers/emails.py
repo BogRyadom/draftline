@@ -243,9 +243,12 @@ async def generate_draft(
             detail="Draft generation failed. Please try again.",
         ) from exc
 
+    # Safety net: strip any CJK artifacts the model may have drifted into, unless
+    # the reply language is East-Asian.
+    body = llm.strip_cjk_if_needed(result.body, email.language)
     # Signature is applied in code (not by the model): strip any model sign-off,
     # then append the configured signature so it never doubles up.
-    body = llm.apply_signature(result.body, tone.get("signature", ""))
+    body = llm.apply_signature(body, tone.get("signature", ""))
 
     draft = Draft(
         user_id=user_uuid,

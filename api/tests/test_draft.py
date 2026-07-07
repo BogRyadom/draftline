@@ -11,6 +11,7 @@ from app.llm import (
     confidence_from_chunks,
     fallback_reply,
     parse_draft,
+    strip_cjk_if_needed,
     strip_out_of_range_citations,
 )
 
@@ -97,6 +98,21 @@ def test_apply_signature_strips_model_signoff_before_appending():
 
 def test_apply_signature_no_signature_leaves_body_without_signoff():
     assert apply_signature("Just the body.", "") == "Just the body."
+
+
+def test_strip_cjk_removes_artifacts_for_non_east_asian_language():
+    assert strip_cjk_if_needed("Привет 你好 world", "Russian") == "Привет world"
+    assert strip_cjk_if_needed("Hello こんにちは there", "English") == "Hello there"
+
+
+def test_strip_cjk_preserves_east_asian_language():
+    text = "你好世界"
+    assert strip_cjk_if_needed(text, "Chinese") == text
+
+
+def test_strip_cjk_leaves_clean_text_untouched():
+    body = "Hello  world.\n\nSecond line."
+    assert strip_cjk_if_needed(body, "English") == body
 
 
 def test_fallback_reply_is_localized_with_english_default():
