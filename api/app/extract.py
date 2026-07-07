@@ -1,8 +1,9 @@
 """Document text extraction and chunking for the knowledge base.
 
 Pure functions (no network, no DB) so they are easy to unit-test. Chunk size is
-~800 tokens approximated as characters (~4 chars/token) with overlap, split on
-whitespace/paragraph boundaries.
+~350 tokens approximated as characters (~4 chars/token) with overlap, split on
+whitespace/paragraph boundaries. Smaller chunks keep retrieval focused so a
+cited passage is about one thing, not a whole page.
 """
 
 from __future__ import annotations
@@ -17,8 +18,8 @@ PDF_MIME = "application/pdf"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 SUPPORTED_MIME_TYPES = {PDF_MIME, DOCX_MIME}
 
-_CHUNK_CHARS = 3200  # ~800 tokens
-_OVERLAP_CHARS = 400  # ~100 tokens
+_CHUNK_CHARS = 1400  # ~350 tokens
+_OVERLAP_CHARS = 200  # ~50 tokens
 
 
 class UnsupportedFileType(Exception):
