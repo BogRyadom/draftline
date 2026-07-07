@@ -265,17 +265,12 @@ def _draft_messages(
         f"Body:\n{body[:_MAX_SOURCE_BODY_CHARS] or '(empty)'}",
         "",
     ]
-    if chunks:
-        lines.append("Knowledge base sources (cite with [n]):")
-        for i, ch in enumerate(chunks, start=1):
-            label = f"{ch.get('filename') or 'document'}, chunk {ch.get('chunk_index')}"
-            lines.append(f"[{i}] ({label}): {(ch.get('content') or '')[:_MAX_CHUNK_CHARS]}")
-    else:
-        lines.append(
-            "Knowledge base sources: NONE. Do not invent an answer. Write a short, "
-            "polite reply stating we do not have this information in our knowledge base "
-            "and that a team member will follow up. Do not include any [n] citations."
-        )
+    # draft() only builds a prompt when there are chunks (the no-grounding case is
+    # handled by a fixed fallback), so the sources block is always present.
+    lines.append("Knowledge base sources (cite with [n]):")
+    for i, ch in enumerate(chunks, start=1):
+        label = f"{ch.get('filename') or 'document'}, chunk {ch.get('chunk_index')}"
+        lines.append(f"[{i}] ({label}): {(ch.get('content') or '')[:_MAX_CHUNK_CHARS]}")
     lines += [
         "",
         f"Tone: formality={tone.get('formality', 'neutral')}, length={tone.get('length', 'concise')}.",
@@ -446,6 +441,18 @@ def draft(
     """Generate a grounded reply draft. Citations and confidence come from the
     retrieved chunks (deterministic), not from the model. The reply is written in
     `language` when known, otherwise in the incoming email's detected language."""
+    # No grounding → return the fixed templated fallback WITHOUT calling the model,
+    # so it can't summarize, agree with, or otherwise mirror the email's topic.
+    if not chunks:
+        return DraftResult(
+            body=fallback_reply(language),
+            citations=[],
+            confidence="low",
+            model=DRAFT_MODEL,
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+
     high_cutoff = get_settings().rag_confidence_high_similarity
     messages = _draft_messages(source_email, chunks, tone, language)
 

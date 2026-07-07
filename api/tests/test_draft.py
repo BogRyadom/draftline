@@ -9,6 +9,7 @@ from app.llm import (
     apply_signature,
     citations_from_chunks,
     confidence_from_chunks,
+    draft,
     fallback_reply,
     parse_draft,
     strip_cjk_if_needed,
@@ -132,6 +133,26 @@ def test_fallback_reply_is_localized_with_english_default():
     assert fallback_reply("English").startswith("Hello")
     assert fallback_reply(None).startswith("Hello")  # unknown → English
     assert fallback_reply("Klingon").startswith("Hello")
+
+
+def test_no_grounding_returns_fixed_fallback_without_topic_mirroring():
+    # Off-topic email + zero retrieved chunks → fixed template, no model call.
+    source = {
+        "from_email": "buyer@acme.com",
+        "subject": "Bulk order of 5000 purple widgets to Berlin",
+        "body_text": "We urgently need 5000 purple widgets shipped to Berlin by Friday.",
+    }
+    result = draft(source_email=source, chunks=[], tone={}, language="English")
+
+    assert result.body == fallback_reply("English")
+    assert result.citations == []
+    assert result.confidence == "low"
+    # The fallback must not summarize or mirror the incoming email's topic.
+    body_lower = result.body.lower()
+    for word in ["purple", "widgets", "berlin", "5000", "friday", "bulk", "order"]:
+        assert word not in body_lower
+    # Signature is appended exactly once by the endpoint's apply_signature step.
+    assert apply_signature(result.body, "спс") == fallback_reply("English") + "\n\nспс"
 
 
 def test_malformed_json_raises():
