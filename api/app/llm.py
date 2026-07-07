@@ -105,17 +105,16 @@ def parse_classification(content: str, categories: list[str]) -> Classification:
     return coerce_classification(json.loads(content), categories)
 
 
-def _complete(messages: list[dict], *, max_429_retries: int = 3) -> str:
-    """Call Groq in JSON mode, backing off on 429. Returns the raw content."""
+def _chat(messages: list[dict], *, model: str, temperature: float = 0.0, max_429_retries: int = 3):
+    """Call Groq in JSON mode, backing off on 429. Returns the completion."""
     for attempt in range(max_429_retries + 1):
         try:
-            resp = _client().chat.completions.create(
-                model=CLASSIFY_MODEL,
+            return _client().chat.completions.create(
+                model=model,
                 messages=messages,
                 response_format={"type": "json_object"},
-                temperature=0,
+                temperature=temperature,
             )
-            return resp.choices[0].message.content or ""
         except RateLimitError:
             if attempt == max_429_retries:
                 raise LLMError("Groq rate limit exceeded after backoff.")
@@ -144,13 +143,153 @@ def classify(
     )
 
     for _ in range(2):  # initial attempt + one retry on parse failure
-        content = _complete(messages)
+        content = _chat(messages, model=CLASSIFY_MODEL, temperature=0).choices[0].message.content or ""
         try:
             return parse_classification(content, categories)
         except (json.JSONDecodeError, ValidationError):
             continue
 
     raise LLMError("Model did not return valid classification JSON.")
+
+
+# ── Drafting (Groq 70B, grounded) ───────────────────────────────────────────
+
+DRAFT_MODEL = "llama-3.3-70b-versatile"
+
+_MAX_SOURCE_BODY_CHARS = 4000
+_MAX_CHUNK_CHARS = 1200
+_MAX_QUOTE_CHARS = 240
+
+
+class Citation(BaseModel):
+    document_id: str | None = None
+    filename: str | None = None
+    chunk_index: int | None = None
+    quote: str
+
+
+class DraftResult(BaseModel):
+    body: str
+    citations: list[Citation]
+    confidence: Literal["low", "medium", "high"]
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+
+
+_DRAFT_SYSTEM_PROMPT = (
+    "You draft reply emails for a human to review before anything is sent. Rules:\n"
+    "- Ground every factual claim ONLY in the incoming email and the provided "
+    "sources. Cite sources inline as [n] using their numbers.\n"
+    "- If the sources do not contain enough information to answer confidently, say "
+    "so plainly in the draft and do NOT invent facts, policies, prices, dates, or "
+    "commitments. In that case set confidence to \"low\".\n"
+    "- Write only the reply body. Do not include a subject line or email headers. "
+    "If a signature is provided, end with it.\n"
+    "- Match the requested tone and length.\n"
+    'Return ONLY JSON: {"body": string, "used_sources": [int], '
+    '"confidence": "low" | "medium" | "high"}.'
+)
+
+
+def _draft_messages(source_email: dict, chunks: list[dict], tone: dict) -> list[dict]:
+    body = (source_email.get("body_text") or source_email.get("snippet") or "").strip()
+    lines = [
+        "Incoming email:",
+        f"From: {source_email.get('from_name') or ''} <{source_email.get('from_email') or 'unknown'}>",
+        f"Subject: {source_email.get('subject') or '(no subject)'}",
+        f"Body:\n{body[:_MAX_SOURCE_BODY_CHARS] or '(empty)'}",
+        "",
+    ]
+    if chunks:
+        lines.append("Knowledge base sources (cite with [n]):")
+        for i, ch in enumerate(chunks, start=1):
+            label = f"{ch.get('filename') or 'document'}, chunk {ch.get('chunk_index')}"
+            lines.append(f"[{i}] ({label}): {(ch.get('content') or '')[:_MAX_CHUNK_CHARS]}")
+    else:
+        lines.append(
+            "Knowledge base sources: NONE were found relevant. Do not invent facts; "
+            "acknowledge that you lack specific information and set confidence to low."
+        )
+    lines += [
+        "",
+        f"Tone: formality={tone.get('formality', 'neutral')}, length={tone.get('length', 'concise')}.",
+    ]
+    signature = (tone.get("signature") or "").strip()
+    lines.append(f'Signature to append: "{signature}"' if signature else "Signature: none.")
+    lines.append("\nReturn the JSON now.")
+
+    return [
+        {"role": "system", "content": _DRAFT_SYSTEM_PROMPT},
+        {"role": "user", "content": "\n".join(lines)},
+    ]
+
+
+def _citations_from_sources(used: list, chunks: list[dict]) -> list[Citation]:
+    citations: list[Citation] = []
+    seen: set[int] = set()
+    for raw in used:
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if n in seen or not (1 <= n <= len(chunks)):
+            continue
+        seen.add(n)
+        ch = chunks[n - 1]
+        citations.append(
+            Citation(
+                document_id=ch.get("document_id"),
+                filename=ch.get("filename"),
+                chunk_index=ch.get("chunk_index"),
+                quote=(ch.get("content") or "").strip()[:_MAX_QUOTE_CHARS],
+            )
+        )
+    return citations
+
+
+def parse_draft(content: str, chunks: list[dict], *, usage_prompt: int, usage_completion: int) -> DraftResult:
+    """Parse the model's draft JSON and map cited source numbers to citations."""
+    data = json.loads(content)
+    body = str(data.get("body", "")).strip()
+    confidence = str(data.get("confidence", "")).strip().lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "low"
+
+    citations = _citations_from_sources(data.get("used_sources") or [], chunks)
+    # Nothing retrieved (or nothing cited) → we cannot claim grounding.
+    if not chunks:
+        confidence = "low"
+    return DraftResult(
+        body=body,
+        citations=citations,
+        confidence=confidence,
+        model=DRAFT_MODEL,
+        prompt_tokens=usage_prompt,
+        completion_tokens=usage_completion,
+    )
+
+
+def draft(*, source_email: dict, chunks: list[dict], tone: dict) -> DraftResult:
+    """Generate a grounded reply draft with citations + confidence. If retrieval is
+    weak, the draft flags uncertainty instead of inventing facts."""
+    messages = _draft_messages(source_email, chunks, tone)
+
+    for _ in range(2):  # initial attempt + one retry on parse failure
+        resp = _chat(messages, model=DRAFT_MODEL, temperature=0.4)
+        content = resp.choices[0].message.content or ""
+        usage = resp.usage
+        try:
+            return parse_draft(
+                content,
+                chunks,
+                usage_prompt=getattr(usage, "prompt_tokens", 0) or 0,
+                usage_completion=getattr(usage, "completion_tokens", 0) or 0,
+            )
+        except (json.JSONDecodeError, ValidationError):
+            continue
+
+    raise LLMError("Model did not return a valid draft.")
 
 
 # ── Embeddings (Gemini) ─────────────────────────────────────────────────────
