@@ -4,14 +4,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
+  { href: "/app/dashboard", label: "Dashboard" },
   { href: "/app", label: "Inbox" },
   { href: "/app/knowledge", label: "Knowledge" },
+  { href: "/app/audit", label: "Audit" },
+  { href: "/app/settings", label: "Settings" },
 ];
 
 export function AppNav() {
   const pathname = usePathname();
   return (
-    <nav className="flex items-center gap-1">
+    <nav className="flex items-center gap-1 whitespace-nowrap">
       {links.map((link) => {
         const active =
           link.href === "/app"
