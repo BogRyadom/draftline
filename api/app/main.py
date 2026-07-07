@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers import accounts as accounts_router
+from app.routers import audit as audit_router
 from app.routers import dashboard as dashboard_router
 from app.routers import documents as documents_router
 from app.routers import drafts as drafts_router
@@ -46,3 +47,4 @@ app.include_router(settings_router.router)
 app.include_router(documents_router.router)
 app.include_router(drafts_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(audit_router.router)
