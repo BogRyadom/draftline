@@ -12,6 +12,7 @@ import datetime as dt
 import html as html_lib
 import os
 import re
+from email.message import EmailMessage
 from email.utils import parseaddr
 
 # Google occasionally returns scopes in a different order or adds `openid`;
@@ -170,6 +171,39 @@ def _extract_body(payload: dict) -> str:
     if mime == "text/html" and body.get("data"):
         return _strip_html(_decode_b64url(body["data"]))
     return ""
+
+
+def create_draft(
+    refresh_token: str,
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+) -> str:
+    """Blocking: write a reply DRAFT to the user's Gmail Drafts folder.
+
+    Uses `users.drafts.create` only — there is deliberately no send path anywhere.
+    Returns the created Gmail draft id.
+    """
+    creds = credentials_from_refresh_token(refresh_token)
+    creds.refresh(GoogleAuthRequest())
+    service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+    message = EmailMessage()
+    if to:
+        message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
+
+    draft_body: dict = {
+        "message": {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
+    }
+    if thread_id:
+        draft_body["message"]["threadId"] = thread_id
+
+    created = service.users().drafts().create(userId="me", body=draft_body).execute()
+    return created["id"]
 
 
 def parse_message(full: dict) -> dict:

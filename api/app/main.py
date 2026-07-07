@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.routers import accounts as accounts_router
 from app.routers import documents as documents_router
+from app.routers import drafts as drafts_router
 from app.routers import emails as emails_router
 from app.routers import me as me_router
 from app.routers import settings as settings_router
@@ -42,3 +43,4 @@ app.include_router(accounts_router.router)
 app.include_router(emails_router.router)
 app.include_router(settings_router.router)
 app.include_router(documents_router.router)
+app.include_router(drafts_router.router)
