@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { apiFetch } from "@/lib/api-client";
 
 /** Synchronous fallback: classify every still-unbadged email now. */
 export function ClassifyAllButton() {
-  const router = useRouter();
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -28,7 +28,9 @@ export function ClassifyAllButton() {
           ? "All caught up"
           : `Classified ${data.classified}${data.failed ? ` · ${data.failed} failed` : ""}`,
       );
-      router.refresh();
+      queryClient.invalidateQueries({ queryKey: ["emails"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["audit"] });
     } catch {
       setMessage("Couldn't reach the API. It may be waking up — try again in ~30s.");
     } finally {

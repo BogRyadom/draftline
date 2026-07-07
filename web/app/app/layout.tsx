@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { AppNav } from "@/components/app-nav";
+import { QueryProvider } from "@/components/query-provider";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/wordmark";
 import { createClient } from "@/lib/supabase/server";
@@ -20,6 +21,7 @@ export default async function AppLayout({
   if (!user) redirect("/sign-in");
 
   return (
+    <QueryProvider>
     <div className="flex min-h-svh flex-col">
       <header className="border-b border-border bg-surface">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6">
@@ -49,5 +51,6 @@ export default async function AppLayout({
         {children}
       </main>
     </div>
+    </QueryProvider>
   );
 }

@@ -1,13 +1,13 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api-client";
 
 export function SyncButton({ accountId }: { accountId: string }) {
-  const router = useRouter();
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +32,11 @@ export function SyncButton({ accountId }: { accountId: string }) {
           ? `Synced ${data.fetched} · ${data.new} new`
           : `Synced ${data.fetched} · up to date`,
       );
-      router.refresh();
+      // New mail + background classification affect these surfaces.
+      queryClient.invalidateQueries({ queryKey: ["emails"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["audit"] });
     } catch {
       setError("Couldn't reach the API. It may be waking up — try again in ~30s.");
     } finally {

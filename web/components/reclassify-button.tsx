@@ -1,19 +1,23 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { apiFetch } from "@/lib/api-client";
 
 export function ReclassifyButton({ emailId }: { emailId: string }) {
-  const router = useRouter();
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
 
   async function run() {
     setLoading(true);
     try {
       const res = await apiFetch(`/emails/${emailId}/classify`, { method: "POST" });
-      if (res.ok) router.refresh();
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["emails"] });
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+        queryClient.invalidateQueries({ queryKey: ["audit"] });
+      }
     } finally {
       setLoading(false);
     }

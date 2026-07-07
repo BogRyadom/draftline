@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -44,11 +45,19 @@ export function DraftReview({
   initialDraft: Draft | null;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState<Draft | null>(initialDraft);
   const [body, setBody] = useState(initialDraft?.body ?? "");
   const [busy, setBusy] = useState<null | "generate" | "save" | "gmail" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Draft actions change the inbox status, dashboard counts, and audit trail.
+  function invalidateLists() {
+    queryClient.invalidateQueries({ queryKey: ["emails"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    queryClient.invalidateQueries({ queryKey: ["audit"] });
+  }
 
   const dirty = draft != null && body !== (draft.body ?? "");
   const savedToGmail = draft?.status === "saved_to_gmail";
@@ -74,6 +83,7 @@ export function DraftReview({
         return;
       }
       apply(await res.json());
+      invalidateLists();
       router.refresh();
     } catch {
       setError("Couldn't reach the API. It may be waking up — try again in ~30s.");
@@ -134,6 +144,7 @@ export function DraftReview({
       }
       apply(await res.json());
       setNotice("Saved to Gmail.");
+      invalidateLists();
       router.refresh();
     } catch {
       setError("Couldn't reach the API. It may be waking up — try again in ~30s.");
@@ -151,6 +162,7 @@ export function DraftReview({
       const res = await apiFetch(`/drafts/${draft.id}/dismiss`, { method: "POST" });
       if (res.ok) {
         apply(await res.json());
+        invalidateLists();
         router.refresh();
       } else {
         setError(`Dismiss failed (HTTP ${res.status}).`);

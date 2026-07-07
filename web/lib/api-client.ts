@@ -19,3 +19,21 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     },
   });
 }
+
+/**
+ * Fetch JSON from the backend, throwing on a non-2xx response so it plugs
+ * straight into React Query's `queryFn`. Use `apiFetch` when you need the raw
+ * Response (e.g. to branch on status).
+ */
+export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await apiFetch(path, init);
+  } catch {
+    throw new Error(
+      "Couldn't reach the API. On the free tier it may be waking from sleep — try again in ~30s.",
+    );
+  }
+  if (!res.ok) throw new Error(`API responded with ${res.status}.`);
+  return (await res.json()) as T;
+}
