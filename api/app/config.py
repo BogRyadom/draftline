@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     gemini_api_key: str = ""
 
+    # ── RAG retrieval tuning ───────────────────────────────────────────────
+    # Cosine similarity (0..1) a chunk must reach to be retrieved at all.
+    rag_similarity_threshold: float = 0.4
+    # Top-chunk similarity at/above which a grounded draft is "high" confidence;
+    # anything retrieved but below it is "medium"; nothing retrieved is "low".
+    rag_confidence_high_similarity: float = 0.6
+
     # ── Gmail OAuth + token encryption (Phase 1+) ──────────────────────────
     google_client_id: str = ""
     google_client_secret: str = ""

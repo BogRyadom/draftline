@@ -180,15 +180,14 @@ class DraftResult(BaseModel):
 _DRAFT_SYSTEM_PROMPT = (
     "You draft reply emails for a human to review before anything is sent. Rules:\n"
     "- Ground every factual claim ONLY in the incoming email and the provided "
-    "sources. Cite sources inline as [n] using their numbers.\n"
-    "- If the sources do not contain enough information to answer confidently, say "
-    "so plainly in the draft and do NOT invent facts, policies, prices, dates, or "
-    "commitments. In that case set confidence to \"low\".\n"
+    "sources. Cite sources inline as [n] using their numbers; never cite a number "
+    "that was not provided.\n"
+    "- If the sources do not contain enough information to answer, say so plainly "
+    "and do NOT invent facts, policies, prices, dates, or commitments.\n"
     "- Write only the reply body. Do not include a subject line or email headers. "
     "If a signature is provided, end with it.\n"
     "- Match the requested tone and length.\n"
-    'Return ONLY JSON: {"body": string, "used_sources": [int], '
-    '"confidence": "low" | "medium" | "high"}.'
+    'Return ONLY JSON: {"body": string}.'
 )
 
 
@@ -225,45 +224,46 @@ def _draft_messages(source_email: dict, chunks: list[dict], tone: dict) -> list[
     ]
 
 
-def _citations_from_sources(used: list, chunks: list[dict]) -> list[Citation]:
-    citations: list[Citation] = []
-    seen: set[int] = set()
-    for raw in used:
-        try:
-            n = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if n in seen or not (1 <= n <= len(chunks)):
-            continue
-        seen.add(n)
-        ch = chunks[n - 1]
-        citations.append(
-            Citation(
-                document_id=ch.get("document_id"),
-                filename=ch.get("filename"),
-                chunk_index=ch.get("chunk_index"),
-                quote=(ch.get("content") or "").strip()[:_MAX_QUOTE_CHARS],
-            )
+def citations_from_chunks(chunks: list[dict]) -> list[Citation]:
+    """Citations are the retrieved above-threshold chunks — the single source of
+    truth, independent of which [n] the model happened to cite. This makes the
+    citations for a given email deterministic."""
+    return [
+        Citation(
+            document_id=ch.get("document_id"),
+            filename=ch.get("filename"),
+            chunk_index=ch.get("chunk_index"),
+            quote=(ch.get("content") or "").strip()[:_MAX_QUOTE_CHARS],
         )
-    return citations
+        for ch in chunks
+    ]
 
 
-def parse_draft(content: str, chunks: list[dict], *, usage_prompt: int, usage_completion: int) -> DraftResult:
-    """Parse the model's draft JSON and map cited source numbers to citations."""
+def confidence_from_chunks(chunks: list[dict], *, high_cutoff: float) -> str:
+    """Confidence is computed from retrieval, not decided by the model:
+    no chunks → low; top similarity below `high_cutoff` → medium; at/above → high."""
+    if not chunks:
+        return "low"
+    top = max(float(ch.get("similarity") or 0.0) for ch in chunks)
+    return "high" if top >= high_cutoff else "medium"
+
+
+def parse_draft(
+    content: str,
+    chunks: list[dict],
+    *,
+    usage_prompt: int,
+    usage_completion: int,
+    high_cutoff: float,
+) -> DraftResult:
+    """Parse the model's draft JSON (body only) and attach code-derived citations
+    and confidence from the retrieved chunks."""
     data = json.loads(content)
     body = str(data.get("body", "")).strip()
-    confidence = str(data.get("confidence", "")).strip().lower()
-    if confidence not in ("low", "medium", "high"):
-        confidence = "low"
-
-    citations = _citations_from_sources(data.get("used_sources") or [], chunks)
-    # Nothing retrieved (or nothing cited) → we cannot claim grounding.
-    if not chunks:
-        confidence = "low"
     return DraftResult(
         body=body,
-        citations=citations,
-        confidence=confidence,
+        citations=citations_from_chunks(chunks),
+        confidence=confidence_from_chunks(chunks, high_cutoff=high_cutoff),
         model=DRAFT_MODEL,
         prompt_tokens=usage_prompt,
         completion_tokens=usage_completion,
@@ -271,8 +271,9 @@ def parse_draft(content: str, chunks: list[dict], *, usage_prompt: int, usage_co
 
 
 def draft(*, source_email: dict, chunks: list[dict], tone: dict) -> DraftResult:
-    """Generate a grounded reply draft with citations + confidence. If retrieval is
-    weak, the draft flags uncertainty instead of inventing facts."""
+    """Generate a grounded reply draft. Citations and confidence come from the
+    retrieved chunks (deterministic), not from the model."""
+    high_cutoff = get_settings().rag_confidence_high_similarity
     messages = _draft_messages(source_email, chunks, tone)
 
     for _ in range(2):  # initial attempt + one retry on parse failure
@@ -285,6 +286,7 @@ def draft(*, source_email: dict, chunks: list[dict], tone: dict) -> DraftResult:
                 chunks,
                 usage_prompt=getattr(usage, "prompt_tokens", 0) or 0,
                 usage_completion=getattr(usage, "completion_tokens", 0) or 0,
+                high_cutoff=high_cutoff,
             )
         except (json.JSONDecodeError, ValidationError):
             continue

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import llm
 from app.audit import log_action
+from app.config import get_settings
 from app.db import get_sessionmaker
 from app.extract import chunk_text, extract_text
 from app.models import Document, DocumentChunk
@@ -103,16 +104,34 @@ async def process_document(
 
 
 async def retrieve(
-    session: AsyncSession, user_id: uuid.UUID, query: str, k: int = 5
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    query: str,
+    k: int = 5,
+    threshold: float | None = None,
 ) -> list[dict]:
-    """Cosine-similarity search over the user's ready document chunks."""
+    """Cosine-similarity search over the user's ready document chunks.
+
+    Returns only chunks whose similarity meets `threshold` (defaults to the
+    configured `rag_similarity_threshold`), ordered by similarity descending and
+    capped at `k`. Each result carries its similarity score, so citations and
+    confidence are derived deterministically from retrieval, not the model.
+    """
+    if threshold is None:
+        threshold = get_settings().rag_similarity_threshold
+    max_distance = 1.0 - threshold
+
     query_vector = await run_in_threadpool(llm.embed_query, query)
     distance = DocumentChunk.embedding.cosine_distance(query_vector)
 
     rows = await session.execute(
         select(DocumentChunk, Document.filename, distance.label("distance"))
         .join(Document, Document.id == DocumentChunk.document_id)
-        .where(DocumentChunk.user_id == user_id, Document.status == "ready")
+        .where(
+            DocumentChunk.user_id == user_id,
+            Document.status == "ready",
+            distance <= max_distance,
+        )
         .order_by(distance)
         .limit(k)
     )

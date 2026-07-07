@@ -1,58 +1,66 @@
-"""Draft parsing + citation mapping tests (no network)."""
+"""Draft assembly tests: code-side citations + confidence (no network)."""
 
 import json
 
 import pytest
 
-from app.llm import DRAFT_MODEL, parse_draft
+from app.llm import (
+    DRAFT_MODEL,
+    citations_from_chunks,
+    confidence_from_chunks,
+    parse_draft,
+)
 
 CHUNKS = [
-    {"document_id": "d1", "filename": "policy.docx", "chunk_index": 0, "content": "Refund within 30 days."},
-    {"document_id": "d2", "filename": "hours.docx", "chunk_index": 3, "content": "Open 9 to 5."},
+    {"document_id": "d1", "filename": "policy.docx", "chunk_index": 0,
+     "content": "Refund within 30 days.", "similarity": 0.72},
+    {"document_id": "d2", "filename": "hours.docx", "chunk_index": 3,
+     "content": "Open 9 to 5.", "similarity": 0.55},
 ]
 
 
-def _json(**kw) -> str:
-    return json.dumps(kw)
+def test_citations_come_from_retrieved_chunks():
+    cites = citations_from_chunks(CHUNKS)
+    assert [c.chunk_index for c in cites] == [0, 3]
+    assert cites[0].document_id == "d1"
+    assert cites[0].filename == "policy.docx"
+    assert cites[0].quote == "Refund within 30 days."
 
 
-def test_maps_used_sources_to_citations():
-    content = _json(body="Yes, within 30 days [1].", used_sources=[1], confidence="high")
-    result = parse_draft(content, CHUNKS, usage_prompt=10, usage_completion=5)
-
+def test_citations_are_deterministic_ignoring_model_claims():
+    # The model's own words about sources/confidence are ignored; citations are
+    # the retrieved chunks, so the same email always yields the same citations.
+    content = json.dumps(
+        {"body": "Yes, within 30 days [1].", "used_sources": [2], "confidence": "low"}
+    )
+    result = parse_draft(
+        content, CHUNKS, usage_prompt=10, usage_completion=5, high_cutoff=0.6
+    )
     assert result.body == "Yes, within 30 days [1]."
-    assert result.confidence == "high"
+    assert [c.chunk_index for c in result.citations] == [0, 3]
     assert result.model == DRAFT_MODEL
     assert result.prompt_tokens == 10 and result.completion_tokens == 5
-    assert len(result.citations) == 1
-    c = result.citations[0]
-    assert c.document_id == "d1"
-    assert c.filename == "policy.docx"
-    assert c.chunk_index == 0
-    assert c.quote == "Refund within 30 days."
 
 
-def test_dedupes_and_drops_out_of_range_sources():
-    content = _json(body="…", used_sources=[1, 1, 2, 5, "x"], confidence="medium")
-    result = parse_draft(content, CHUNKS, usage_prompt=1, usage_completion=1)
-
-    assert [c.chunk_index for c in result.citations] == [0, 3]  # sources 1 and 2 only
+def test_confidence_high_when_top_similarity_meets_cutoff():
+    assert confidence_from_chunks(CHUNKS, high_cutoff=0.6) == "high"  # top 0.72
 
 
-def test_no_chunks_forces_low_confidence():
-    content = _json(body="I don't have that information on file.", used_sources=[], confidence="high")
-    result = parse_draft(content, [], usage_prompt=1, usage_completion=1)
+def test_confidence_medium_when_below_cutoff():
+    assert confidence_from_chunks(CHUNKS, high_cutoff=0.8) == "medium"  # top 0.72
 
+
+def test_confidence_low_when_no_chunks():
+    assert confidence_from_chunks([], high_cutoff=0.6) == "low"
+
+
+def test_no_chunks_yields_low_confidence_and_no_citations():
+    content = json.dumps({"body": "A team member will follow up."})
+    result = parse_draft(content, [], usage_prompt=1, usage_completion=1, high_cutoff=0.6)
     assert result.confidence == "low"
     assert result.citations == []
 
 
-def test_invalid_confidence_defaults_low():
-    content = _json(body="…", used_sources=[1], confidence="totally-sure")
-    result = parse_draft(content, CHUNKS, usage_prompt=1, usage_completion=1)
-    assert result.confidence == "low"
-
-
 def test_malformed_json_raises():
     with pytest.raises(json.JSONDecodeError):
-        parse_draft("not json", CHUNKS, usage_prompt=0, usage_completion=0)
+        parse_draft("not json", CHUNKS, usage_prompt=0, usage_completion=0, high_cutoff=0.6)
