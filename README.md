@@ -42,7 +42,7 @@ draftline/
 - [x] **Phase 1** — Connect Gmail (OAuth) + sync unread mail into the app
 - [x] **Phase 2** — Auto-classify: category + priority + reason (Groq JSON mode)
 - [x] **Phase 3** — Knowledge base: upload → chunk → embed (Gemini) → pgvector retrieval
-- [ ] Phase 4 — Draft generation
+- [x] **Phase 4** — Grounded reply drafts with citations; review, edit, Save to Gmail (never sent)
 - [ ] Phase 5 — Dashboard, audit, settings, polish
 - [ ] Phase 6 — Deploy + demo assets
 
