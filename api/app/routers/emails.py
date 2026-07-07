@@ -8,19 +8,33 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import llm
+from app.audit import log_action
 from app.auth import CurrentUser, get_current_user
 from app.classification import classify_one, fetch_unbadged_ids, get_user_categories
 from app.db import get_session
+from app.knowledge import retrieve
 from app.llm import LLMError
-from app.models import Email
+from app.models import Draft, Email, Settings
+from app.schemas import DraftOut, EmailDetail
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
 logger = logging.getLogger("draftline.emails")
+
+_DEFAULT_TONE = {"formality": "neutral", "length": "concise", "signature": ""}
+
+
+async def _user_tone(session: AsyncSession, user_id: uuid.UUID) -> dict:
+    tone = (
+        await session.execute(select(Settings.tone).where(Settings.user_id == user_id))
+    ).scalar_one_or_none()
+    return tone if isinstance(tone, dict) and tone else _DEFAULT_TONE
 
 # Ordering rank for priority sort (urgent first).
 _PRIORITY_RANK = case(
@@ -148,3 +162,108 @@ async def classify_email(
     await session.commit()
     await session.refresh(email)
     return email
+
+
+async def _latest_draft(session: AsyncSession, email_id: uuid.UUID, user_id: uuid.UUID) -> Draft | None:
+    return (
+        await session.execute(
+            select(Draft)
+            .where(Draft.email_id == email_id, Draft.user_id == user_id)
+            .order_by(Draft.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+@router.get("/{email_id}", response_model=EmailDetail)
+async def get_email(
+    email_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EmailDetail:
+    """Full email (with body) plus its latest draft, for the review surface."""
+    user_uuid = uuid.UUID(user.id)
+    email = (
+        await session.execute(
+            select(Email).where(Email.id == email_id, Email.user_id == user_uuid)
+        )
+    ).scalar_one_or_none()
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found.")
+
+    draft = await _latest_draft(session, email_id, user_uuid)
+    detail = EmailDetail.model_validate(email)
+    detail.draft = DraftOut.model_validate(draft) if draft is not None else None
+    return detail
+
+
+@router.post("/{email_id}/draft", response_model=DraftOut)
+async def generate_draft(
+    email_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Draft:
+    """Generate a grounded reply draft: retrieve KB context, call the 70B model,
+    persist as `pending`. Never sends — the draft is saved in-app for review."""
+    user_uuid = uuid.UUID(user.id)
+    email = (
+        await session.execute(
+            select(Email).where(Email.id == email_id, Email.user_id == user_uuid)
+        )
+    ).scalar_one_or_none()
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found.")
+
+    query = " ".join(
+        part for part in (email.subject, email.body_text or email.snippet) if part
+    ).strip()[:2000]
+    chunks = await retrieve(session, user_uuid, query, k=5) if query else []
+    tone = await _user_tone(session, user_uuid)
+
+    source = {
+        "from_name": email.from_name,
+        "from_email": email.from_email,
+        "subject": email.subject,
+        "body_text": email.body_text,
+        "snippet": email.snippet,
+    }
+    try:
+        result = await run_in_threadpool(
+            llm.draft, source_email=source, chunks=chunks, tone=tone
+        )
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Draft generation failed. Please try again.",
+        ) from exc
+
+    draft = Draft(
+        user_id=user_uuid,
+        email_id=email.id,
+        body=result.body,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        citations=[c.model_dump() for c in result.citations],
+        confidence=result.confidence,
+        status="pending",
+    )
+    session.add(draft)
+    email.status = "drafted"
+    await session.flush()
+
+    await log_action(
+        session,
+        user_id=user_uuid,
+        action="draft_generated",
+        entity_type="draft",
+        entity_id=draft.id,
+        metadata={
+            "email_id": str(email.id),
+            "confidence": result.confidence,
+            "citations": len(result.citations),
+        },
+    )
+    await session.commit()
+    await session.refresh(draft)
+    return draft
