@@ -65,6 +65,8 @@ class Email(Base):
     category: Mapped[str | None] = mapped_column(String)
     priority: Mapped[str | None] = mapped_column(String)
     classification_reason: Mapped[str | None] = mapped_column(Text)
+    # Human-readable language the email is written in (e.g. "English", "Russian").
+    language: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'new'"))
     created_at: Mapped[dt.datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")

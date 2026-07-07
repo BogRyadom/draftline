@@ -32,6 +32,7 @@ PRIORITIES = ("low", "normal", "high", "urgent")
 # Bound token usage on very long emails.
 _MAX_BODY_CHARS = 2000
 _MAX_REASON_CHARS = 280
+_MAX_LANGUAGE_CHARS = 40
 
 
 class LLMError(Exception):
@@ -42,6 +43,8 @@ class Classification(BaseModel):
     category: str
     priority: Literal["low", "normal", "high", "urgent"]
     reason: str
+    # Human-readable language the email is written in (e.g. "English", "Russian").
+    language: str = ""
 
 
 @lru_cache
@@ -55,11 +58,12 @@ def _client() -> OpenAI:
 _SYSTEM_PROMPT = (
     "You are an email triage assistant. Read one email and classify it. "
     "Respond with ONLY a JSON object of exactly this shape: "
-    '{"category": string, "priority": string, "reason": string}. '
+    '{"category": string, "priority": string, "reason": string, "language": string}. '
     "`priority` must be one of: low, normal, high, urgent — based on how urgent "
     "and important the email is to the recipient. `reason` is one short sentence "
     "explaining the choice. `category` must be exactly one of the allowed "
-    "categories provided by the user."
+    "categories provided by the user. `language` is the human-readable name of the "
+    'language the email is written in (e.g. "English", "Russian", "Spanish").'
 )
 
 
@@ -97,7 +101,8 @@ def coerce_classification(data: dict, categories: list[str]) -> Classification:
         match = "Other" if "Other" in categories else (categories[-1] if categories else "Other")
 
     reason = str(data.get("reason", "")).strip()[:_MAX_REASON_CHARS]
-    return Classification(category=match, priority=priority, reason=reason)
+    language = str(data.get("language", "")).strip()[:_MAX_LANGUAGE_CHARS]
+    return Classification(category=match, priority=priority, reason=reason, language=language)
 
 
 def parse_classification(content: str, categories: list[str]) -> Classification:
@@ -191,9 +196,28 @@ _DRAFT_SYSTEM_PROMPT = (
 )
 
 
-def _draft_messages(source_email: dict, chunks: list[dict], tone: dict) -> list[dict]:
+def _language_instruction(language: str | None) -> str:
+    """How the reply's language is chosen: honor the detected language, else
+    tell the model to mirror the incoming email's language."""
+    lang = (language or "").strip()
+    if lang:
+        return (
+            f"Write the ENTIRE reply in {lang}, matching the language the customer "
+            "wrote in. Do not switch languages."
+        )
+    return (
+        "Detect the language of the incoming email and write the ENTIRE reply in "
+        "that same language. Do not switch languages."
+    )
+
+
+def _draft_messages(
+    source_email: dict, chunks: list[dict], tone: dict, language: str | None = None
+) -> list[dict]:
     body = (source_email.get("body_text") or source_email.get("snippet") or "").strip()
     lines = [
+        _language_instruction(language),
+        "",
         "Incoming email:",
         f"From: {source_email.get('from_name') or ''} <{source_email.get('from_email') or 'unknown'}>",
         f"Subject: {source_email.get('subject') or '(no subject)'}",
@@ -270,11 +294,14 @@ def parse_draft(
     )
 
 
-def draft(*, source_email: dict, chunks: list[dict], tone: dict) -> DraftResult:
+def draft(
+    *, source_email: dict, chunks: list[dict], tone: dict, language: str | None = None
+) -> DraftResult:
     """Generate a grounded reply draft. Citations and confidence come from the
-    retrieved chunks (deterministic), not from the model."""
+    retrieved chunks (deterministic), not from the model. The reply is written in
+    `language` when known, otherwise in the incoming email's detected language."""
     high_cutoff = get_settings().rag_confidence_high_similarity
-    messages = _draft_messages(source_email, chunks, tone)
+    messages = _draft_messages(source_email, chunks, tone, language)
 
     for _ in range(2):  # initial attempt + one retry on parse failure
         resp = _chat(messages, model=DRAFT_MODEL, temperature=0.4)

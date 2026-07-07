@@ -55,6 +55,7 @@ async def classify_one(
     email.category = result.category
     email.priority = result.priority
     email.classification_reason = result.reason
+    email.language = result.language or None
     email.status = "classified"
 
     await log_action(
@@ -63,7 +64,11 @@ async def classify_one(
         action="email_classified",
         entity_type="email",
         entity_id=email.id,
-        metadata={"category": result.category, "priority": result.priority},
+        metadata={
+            "category": result.category,
+            "priority": result.priority,
+            "language": result.language,
+        },
     )
     return result
 

@@ -229,7 +229,11 @@ async def generate_draft(
     }
     try:
         result = await run_in_threadpool(
-            llm.draft, source_email=source, chunks=chunks, tone=tone
+            llm.draft,
+            source_email=source,
+            chunks=chunks,
+            tone=tone,
+            language=email.language,
         )
     except LLMError as exc:
         raise HTTPException(

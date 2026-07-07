@@ -47,6 +47,21 @@ def test_reason_is_truncated():
     assert len(c.reason) <= 280
 
 
+def test_classification_captures_language():
+    c = coerce_classification(
+        {"category": "Support", "priority": "normal", "reason": "x", "language": "Russian"},
+        CATEGORIES,
+    )
+    assert c.language == "Russian"
+
+
+def test_classification_language_defaults_empty_when_missing():
+    c = coerce_classification(
+        {"category": "Support", "priority": "normal", "reason": "x"}, CATEGORIES
+    )
+    assert c.language == ""
+
+
 def test_parse_classification_from_json_string():
     content = json.dumps({"category": "Sales", "priority": "urgent", "reason": "Deal."})
     c = parse_classification(content, CATEGORIES)
