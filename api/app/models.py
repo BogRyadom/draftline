@@ -14,6 +14,10 @@ from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.vectortype import Vector
+
+EMBEDDING_DIM = 768
+
 
 class Base(DeclarativeBase):
     pass
@@ -64,6 +68,36 @@ class Email(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'new'"))
     created_at: Mapped[dt.datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
+    )
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'processing'"))
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=text("now()")
+    )
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
 
