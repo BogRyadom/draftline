@@ -182,9 +182,12 @@ function EmailRow({ email }: { email: EmailItem }) {
           {formatDate(email.received_at)}
         </span>
       </div>
-      <span className="truncate text-sm text-ink">
+      <Link
+        href={`/app/emails/${email.id}`}
+        className="truncate text-sm font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+      >
         {email.subject || "(no subject)"}
-      </span>
+      </Link>
       {email.snippet && (
         <span className="line-clamp-1 text-sm text-ink-soft">{email.snippet}</span>
       )}
@@ -203,8 +206,14 @@ function EmailRow({ email }: { email: EmailItem }) {
             {email.priority && <PriorityBadge priority={email.priority} />}
           </>
         )}
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-3">
           <ReclassifyButton emailId={email.id} />
+          <Link
+            href={`/app/emails/${email.id}`}
+            className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+          >
+            Draft reply →
+          </Link>
         </span>
       </div>
       {email.classification_reason && (
