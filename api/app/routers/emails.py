@@ -241,10 +241,14 @@ async def generate_draft(
             detail="Draft generation failed. Please try again.",
         ) from exc
 
+    # Signature is applied in code (not by the model): strip any model sign-off,
+    # then append the configured signature so it never doubles up.
+    body = llm.apply_signature(result.body, tone.get("signature", ""))
+
     draft = Draft(
         user_id=user_uuid,
         email_id=email.id,
-        body=result.body,
+        body=body,
         model=result.model,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,

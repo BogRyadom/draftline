@@ -193,8 +193,9 @@ _DRAFT_SYSTEM_PROMPT = (
     "short, polite reply saying we do not have this information in our knowledge base "
     "and that a team member will follow up. Invent no facts, policies, prices, dates, "
     "or commitments, and cite nothing.\n"
-    "- Write only the reply body. Do not include a subject line or email headers. "
-    "If a signature is provided, end with it.\n"
+    "- Write only the reply body: no subject line, no email headers, and no "
+    "signature or sign-off (do not add 'Best regards', a name, etc.) — the "
+    "signature is added afterward.\n"
     "- Match the requested tone and length.\n"
     'Return ONLY JSON: {"body": string}.'
 )
@@ -242,10 +243,8 @@ def _draft_messages(
     lines += [
         "",
         f"Tone: formality={tone.get('formality', 'neutral')}, length={tone.get('length', 'concise')}.",
+        "\nReturn the JSON now.",
     ]
-    signature = (tone.get("signature") or "").strip()
-    lines.append(f'Signature to append: "{signature}"' if signature else "Signature: none.")
-    lines.append("\nReturn the JSON now.")
 
     return [
         {"role": "system", "content": _DRAFT_SYSTEM_PROMPT},
@@ -266,6 +265,46 @@ def citations_from_chunks(chunks: list[dict]) -> list[Citation]:
         )
         for ch in chunks
     ]
+
+
+# A small multilingual set of closing salutations, used to detect and trim a
+# model-added sign-off before appending the user's configured signature.
+_SIGNOFF_MARKERS = frozenset(
+    {
+        "best regards", "kind regards", "warm regards", "best wishes", "regards",
+        "best", "sincerely", "yours sincerely", "yours faithfully", "yours truly",
+        "respectfully", "cheers", "thanks", "thank you", "many thanks", "thanks again",
+        "с уважением", "с наилучшими пожеланиями", "спасибо",  # Russian
+        "saludos", "atentamente", "un saludo",  # Spanish
+        "cordialement", "bien à vous",  # French
+        "mit freundlichen grüßen",  # German
+    }
+)
+
+
+def strip_signoff(body: str) -> str:
+    """Trim a trailing closing salutation and the name line(s) after it, so an
+    appended signature does not double up or drift. Conservative: only fires when
+    a known closing is, on its own, one of the last few lines."""
+    lines = body.rstrip().split("\n")
+    start = max(0, len(lines) - 5)
+    for i in range(len(lines) - 1, start - 1, -1):
+        norm = lines[i].strip().rstrip(".,!;:").lower()
+        if not norm:
+            continue
+        if norm in _SIGNOFF_MARKERS:
+            return "\n".join(lines[:i]).rstrip()
+    return body.rstrip()
+
+
+def apply_signature(body: str, signature: str) -> str:
+    """Strip any model-generated sign-off, then append the configured signature.
+    Signature handling lives in code, not the prompt, so it never doubles up."""
+    body = strip_signoff(body)
+    signature = (signature or "").strip()
+    if signature:
+        body = f"{body}\n\n{signature}"
+    return body
 
 
 _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")

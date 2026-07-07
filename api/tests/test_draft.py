@@ -6,6 +6,7 @@ import pytest
 
 from app.llm import (
     DRAFT_MODEL,
+    apply_signature,
     citations_from_chunks,
     confidence_from_chunks,
     parse_draft,
@@ -78,6 +79,23 @@ def test_parse_draft_drops_hallucinated_markers_in_body():
     result = parse_draft(content, CHUNKS, usage_prompt=1, usage_completion=1, high_cutoff=0.6)
     assert "[9]" not in result.body
     assert "[1]" in result.body
+
+
+def test_apply_signature_appends_configured_signature():
+    assert apply_signature("Hello there.", "Best,\nBohdan") == "Hello there.\n\nBest,\nBohdan"
+
+
+def test_apply_signature_strips_model_signoff_before_appending():
+    body = "Your refund is processed.\n\nBest regards,\nDraftline Bot"
+    out = apply_signature(body, "Warm wishes,\nSupport Team")
+    assert "Draftline Bot" not in out
+    assert "Best regards" not in out
+    assert "Your refund is processed." in out
+    assert out.endswith("Warm wishes,\nSupport Team")
+
+
+def test_apply_signature_no_signature_leaves_body_without_signoff():
+    assert apply_signature("Just the body.", "") == "Just the body."
 
 
 def test_malformed_json_raises():
