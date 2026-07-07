@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { AppNav } from "@/components/app-nav";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/wordmark";
 import { createClient } from "@/lib/supabase/server";
@@ -22,7 +23,10 @@ export default async function AppLayout({
     <div className="flex min-h-svh flex-col">
       <header className="border-b border-border bg-surface">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-6 py-3.5">
-          <Wordmark href="/app" />
+          <div className="flex items-center gap-6">
+            <Wordmark href="/app" />
+            <AppNav />
+          </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-sm text-ink-soft sm:inline">
               {user.email}
