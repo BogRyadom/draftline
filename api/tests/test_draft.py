@@ -100,6 +100,18 @@ def test_apply_signature_no_signature_leaves_body_without_signoff():
     assert apply_signature("Just the body.", "") == "Just the body."
 
 
+def test_signature_not_doubled_when_model_repeats_it_russian():
+    # Model added its own "спс"; configured signature is also "спс" → exactly one.
+    body = "Рад помочь вам с заказом.\nспс"
+    out = apply_signature(body, "спс")
+    assert out == "Рад помочь вам с заказом.\n\nспс"
+
+
+def test_signature_not_doubled_when_model_signs_off_english():
+    out = apply_signature("Happy to help.\nThanks", "Best,\nBohdan")
+    assert out == "Happy to help.\n\nBest,\nBohdan"
+
+
 def test_strip_cjk_removes_artifacts_for_non_east_asian_language():
     assert strip_cjk_if_needed("Привет 你好 world", "Russian") == "Привет world"
     assert strip_cjk_if_needed("Hello こんにちは there", "English") == "Hello there"

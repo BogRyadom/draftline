@@ -306,16 +306,19 @@ def citations_from_chunks(chunks: list[dict]) -> list[Citation]:
 
 
 # A small multilingual set of closing salutations, used to detect and trim a
-# model-added sign-off before appending the user's configured signature.
+# model-added sign-off (on its own line) before appending the user's configured
+# signature — so the two never double up. Includes short/SMS-style forms.
 _SIGNOFF_MARKERS = frozenset(
     {
         "best regards", "kind regards", "warm regards", "best wishes", "regards",
         "best", "sincerely", "yours sincerely", "yours faithfully", "yours truly",
         "respectfully", "cheers", "thanks", "thank you", "many thanks", "thanks again",
-        "с уважением", "с наилучшими пожеланиями", "спасибо",  # Russian
-        "saludos", "atentamente", "un saludo",  # Spanish
-        "cordialement", "bien à vous",  # French
-        "mit freundlichen grüßen",  # German
+        "thx", "tnx", "ty", "br", "rgds",  # abbreviations
+        "с уважением", "с наилучшими пожеланиями", "спасибо", "спс", "cnc",  # Russian
+        "saludos", "atentamente", "un saludo", "gracias",  # Spanish
+        "cordialement", "bien à vous", "merci",  # French
+        "mit freundlichen grüßen", "danke",  # German
+        "grazie",  # Italian
     }
 )
 
