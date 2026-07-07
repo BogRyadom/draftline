@@ -17,3 +17,10 @@ google-api-python-client>=2.130,<3.0
 
 # LLM (Phase 2+): Groq via the OpenAI-compatible client.
 openai>=1.40,<3.0
+
+# Knowledge base (Phase 3): document parsing + multipart upload parsing. The
+# pgvector column type is a small custom SQLAlchemy type (app/vectortype.py) —
+# no numpy dependency.
+pypdf>=4.0,<6.0
+python-docx>=1.1,<2.0
+python-multipart>=0.0.9,<1.0
