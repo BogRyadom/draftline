@@ -29,6 +29,25 @@ logger = logging.getLogger("draftline.emails")
 
 _DEFAULT_TONE = {"formality": "neutral", "length": "concise", "signature": ""}
 
+# The KB-retrieval query is the subject + only the first RAG_QUERY_HEAD_CHARS of
+# the body — not the whole email. A sweep over real emails (billing "charged
+# twice", a long off-topic philosophical email, and a long durability/warranty
+# question) showed head-only separates relevant from off-topic best: embedding
+# the entire body drags off-topic emails up toward a generic "support-shaped"
+# centroid, shrinking the gap. A subject+head+tail hybrid was worse still — the
+# tail of a long off-topic email is usually warm closing pleasantries that match
+# the KB's reply-tone guidance, importing false-positive signal. Head-only wins.
+# NOTE: this truncation applies to RETRIEVAL ONLY; the draft prompt still gets
+# the full body (see `source` in generate_draft) so replies stay well-grounded.
+RAG_QUERY_HEAD_CHARS = 250
+
+
+def build_retrieval_query(subject: str | None, body: str | None) -> str:
+    """Focused KB-retrieval query: subject + the first RAG_QUERY_HEAD_CHARS of the
+    body. Retrieval only — the draft prompt sees the full body."""
+    head = (body or "")[:RAG_QUERY_HEAD_CHARS]
+    return " ".join(part for part in (subject, head) if part).strip()
+
 
 async def _user_tone(session: AsyncSession, user_id: uuid.UUID) -> dict:
     tone = (
@@ -214,9 +233,7 @@ async def generate_draft(
     if email is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found.")
 
-    query = " ".join(
-        part for part in (email.subject, email.body_text or email.snippet) if part
-    ).strip()[:2000]
+    query = build_retrieval_query(email.subject, email.body_text or email.snippet)
     chunks = await retrieve(session, user_uuid, query, k=5) if query else []
     tone = await _user_tone(session, user_uuid)
 
