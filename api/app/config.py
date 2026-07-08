@@ -44,7 +44,11 @@ class Settings(BaseSettings):
 
     # ── RAG retrieval tuning ───────────────────────────────────────────────
     # Cosine similarity (0..1) a chunk must reach to be retrieved at all.
-    rag_similarity_threshold: float = 0.4
+    # Tuned against the live KB with the focused retrieval query (subject + first
+    # 250 chars): genuinely relevant emails land at ~0.65–0.67, off-topic ones at
+    # ~0.57. 0.60 separates them with margin, biased slightly toward keeping
+    # relevant chunks (a missed chunk hurts grounding more than an extra one).
+    rag_similarity_threshold: float = 0.60
     # Top-chunk similarity at/above which a grounded draft is "high" confidence;
     # anything retrieved but below it is "medium"; nothing retrieved is "low".
     rag_confidence_high_similarity: float = 0.6
